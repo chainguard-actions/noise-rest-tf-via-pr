@@ -1,0 +1,39 @@
+name: Test plan with no changes
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install dependencies
+        run: bash tests/fixtures/install-deps.sh
+      - name: Prepare fresh working directory
+        run: |
+          rm -rf .tftest-empty
+          cp -r tests/fixtures/tf-empty .tftest-empty
+      - id: action
+        uses: .
+        with:
+          command: plan
+          arg-chdir: .tftest-empty
+          pr-number: "0"
+          upload-plan: "false"
+          preserve-plan: "true"
+          comment-pr: never
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "diff: $DIFF"
+          fail=0
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: expected exitcode 0"; fail=1; }
+          case "$SUMMARY" in "No changes."*) ;; *) echo "FAIL: expected 'No changes.' summary"; fail=1 ;; esac
+          [ -z "$(echo "$DIFF" | tr -d '[:space:]')" ] || { echo "FAIL: expected empty diff"; fail=1; }
+          [ -f .tftest-empty/tfplan ] || { echo "FAIL: plan file should be preserved"; fail=1; }
+          [ "$fail" = "0" ] || exit 1
+          echo "PASS"

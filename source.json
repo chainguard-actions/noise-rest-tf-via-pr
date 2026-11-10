@@ -1,6 +1,12 @@
 {
   "owner": "noise-rest",
   "repo": "tf-via-pr",
-  "version": "",
-  "url": "https://github.com/noise-rest/tf-via-pr"
+  "version": "v13.7.8",
+  "commit_sha": "6cdb96be0f5fe9323a6ab881288c234b59129fc5",
+  "url": "https://github.com/noise-rest/tf-via-pr",
+  "policy_sha": "d636be7e43ef829af6e853da6b3c7566db9f72fe",
+  "test_policy_sha": "843adf9e4b8f85d0c08b27b9d0b09dd094b54702",
+  "test_agent_version": "2",
+  "harden_agent_version": "2",
+  "dependency_fingerprint": "sha256:ba80e8a80bb22f11bb3c9d86c14b62312b19a013a07a72440c77685fb1840df1"
 }

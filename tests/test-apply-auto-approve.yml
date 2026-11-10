@@ -1,0 +1,40 @@
+name: Test apply with auto-approve
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install dependencies
+        run: bash tests/fixtures/install-deps.sh
+      - name: Prepare fresh working directory
+        run: |
+          rm -rf .tftest-apply
+          cp -r tests/fixtures/tf .tftest-apply
+      - id: action
+        uses: .
+        with:
+          command: apply
+          arg-auto-approve: "true"
+          arg-var: message=world
+          working-directory: .tftest-apply
+          pr-number: "0"
+          comment-pr: never
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "command: $COMMAND"
+          fail=0
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: expected exitcode 0"; fail=1; }
+          case "$SUMMARY" in "Apply complete! Resources: 1 added, 0 changed, 0 destroyed."*) ;; *) echo "FAIL: unexpected summary"; fail=1 ;; esac
+          [ "$COMMAND" = "terraform apply -chdir=.tftest-apply -auto-approve" ] || { echo "FAIL: unexpected command (var should be hidden)"; fail=1; }
+          [ -f .tftest-apply/terraform.tfstate ] || { echo "FAIL: state file not created"; fail=1; }
+          grep -q '"world"' .tftest-apply/terraform.tfstate || { echo "FAIL: var value not applied"; fail=1; }
+          [ "$fail" = "0" ] || exit 1
+          echo "PASS"

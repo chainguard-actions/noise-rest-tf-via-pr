@@ -1,0 +1,49 @@
+name: Test plan with changes
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install dependencies
+        run: bash tests/fixtures/install-deps.sh
+      - name: Prepare fresh working directory
+        run: |
+          rm -rf .tftest-plan
+          cp -r tests/fixtures/tf .tftest-plan
+      - id: action
+        uses: .
+        with:
+          command: plan
+          working-directory: .tftest-plan
+          pr-number: "0"
+          upload-plan: "false"
+          comment-pr: never
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          RESULT: ${{ steps.action.outputs.result }}
+          BODY: ${{ steps.action.outputs.comment-body }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "diff: $DIFF"
+          echo "command: $COMMAND"
+          echo "identifier: $IDENTIFIER"
+          fail=0
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: expected exitcode 2"; fail=1; }
+          case "$SUMMARY" in "Plan: 1 to add, 0 to change, 0 to destroy."*) ;; *) echo "FAIL: unexpected summary"; fail=1 ;; esac
+          echo "$DIFF" | grep -qF "+ terraform_data.example will be created" || { echo "FAIL: diff missing create line"; fail=1; }
+          [ "$COMMAND" = "terraform plan -chdir=.tftest-plan" ] || { echo "FAIL: unexpected command"; fail=1; }
+          HASH=$(printf ' -chdir=%s' ".tftest-plan" | md5sum | cut -d' ' -f1)
+          [ "$IDENTIFIER" = "terraform-0-${HASH}.tfplan" ] || { echo "FAIL: expected identifier terraform-0-${HASH}.tfplan"; fail=1; }
+          echo "$RESULT" | grep -qF "terraform_data.example" || { echo "FAIL: result missing resource"; fail=1; }
+          echo "$BODY" | grep -qF "terraform-0-${HASH}.tfplan" || { echo "FAIL: comment body missing identifier"; fail=1; }
+          [ ! -f .tftest-plan/tfplan ] || { echo "FAIL: plan file should be cleaned up"; fail=1; }
+          [ "$fail" = "0" ] || exit 1
+          echo "PASS"

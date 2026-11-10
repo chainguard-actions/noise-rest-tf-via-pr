@@ -1,0 +1,39 @@
+name: Test init with validate and format
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install dependencies
+        run: bash tests/fixtures/install-deps.sh
+      - name: Prepare fresh working directory
+        run: |
+          rm -rf .tftest-init
+          cp -r tests/fixtures/tf .tftest-init
+      - id: action
+        uses: .
+        with:
+          command: init
+          format: "true"
+          validate: "true"
+          working-directory: .tftest-init
+          pr-number: "0"
+          comment-pr: never
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "command: $COMMAND"
+          fail=0
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: expected exitcode 0"; fail=1; }
+          case "$SUMMARY" in "Success! The configuration is valid."*) ;; *) echo "FAIL: unexpected summary"; fail=1 ;; esac
+          [ "$COMMAND" = "terraform validate -chdir=.tftest-init" ] || { echo "FAIL: unexpected command"; fail=1; }
+          [ -d .tftest-init/.terraform ] || [ -f .tftest-init/.terraform.lock.hcl ] || echo "note: no .terraform dir (no providers needed)"
+          [ "$fail" = "0" ] || exit 1
+          echo "PASS"
