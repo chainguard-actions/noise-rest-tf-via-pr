@@ -1,0 +1,26 @@
+name: Test missing tool error
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          tool: definitely-not-a-real-tf-tool
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert action failed
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "identifier: $IDENTIFIER"
+          if [ "$OUTCOME" != "failure" ]; then echo "FAIL: expected failure for missing tool"; exit 1; fi
+          if [ -n "$IDENTIFIER" ]; then echo "FAIL: setup should abort before identifier"; exit 1; fi
+          echo "PASS"

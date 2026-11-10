@@ -1,0 +1,48 @@
+name: Test plan with encryption and preserved plan
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/fakebin" tf-work
+          cp tests/fixtures/fake-tf.sh "$RUNNER_TEMP/fakebin/terraform"
+          chmod +x "$RUNNER_TEMP/fakebin/terraform"
+          for t in gh unzip; do
+            if ! command -v "$t" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fakebin/$t"
+              chmod +x "$RUNNER_TEMP/fakebin/$t"
+            fi
+          done
+          echo "$RUNNER_TEMP/fakebin" >> "$GITHUB_PATH"
+          echo "FAKE_TF_LOG=$RUNNER_TEMP/fake-tf.log" >> "$GITHUB_ENV"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          working-directory: tf-work
+          pr-number: "0"
+          upload-plan: "false"
+          plan-encrypt: "test-passphrase"
+          preserve-plan: "true"
+          arg-detailed-exitcode: "false"
+      - name: Assert outputs and files
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          ls -la tf-work
+          if [ "$EXITCODE" != "0" ]; then echo "FAIL: expected exitcode 0 without detailed-exitcode"; exit 1; fi
+          if [ "$SUMMARY" != "Plan: 1 to add, 0 to change, 0 to destroy." ]; then echo "FAIL: summary"; exit 1; fi
+          if [ ! -f tf-work/tfplan ]; then echo "FAIL: plan file should be preserved"; exit 1; fi
+          if [ ! -f tf-work/tfplan.encrypted ]; then echo "FAIL: encrypted plan missing"; exit 1; fi
+          dec=$(openssl enc -aes-256-ctr -pbkdf2 -salt -d -in tf-work/tfplan.encrypted -pass pass:test-passphrase)
+          echo "decrypted: $dec"
+          if [ "$dec" != "fake-plan-content" ]; then echo "FAIL: decrypted content mismatch"; exit 1; fi
+          if grep -q -- "-detailed-exitcode" "$FAKE_TF_LOG"; then echo "FAIL: detailed-exitcode should be off"; exit 1; fi
+          echo "PASS"

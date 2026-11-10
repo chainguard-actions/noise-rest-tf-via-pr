@@ -1,0 +1,54 @@
+name: Test plan basic
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/fakebin" tf-work
+          cp tests/fixtures/fake-tf.sh "$RUNNER_TEMP/fakebin/terraform"
+          chmod +x "$RUNNER_TEMP/fakebin/terraform"
+          for t in gh unzip; do
+            if ! command -v "$t" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fakebin/$t"
+              chmod +x "$RUNNER_TEMP/fakebin/$t"
+            fi
+          done
+          echo "$RUNNER_TEMP/fakebin" >> "$GITHUB_PATH"
+          echo "FAKE_TF_LOG=$RUNNER_TEMP/fake-tf.log" >> "$GITHUB_ENV"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          working-directory: tf-work
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          BODY: ${{ steps.action.outputs.comment-body }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "diff: $DIFF"
+          echo "identifier: $IDENTIFIER"
+          echo "command: $COMMAND"
+          echo "fake log:"; cat "$FAKE_TF_LOG"
+          if [ "$EXITCODE" != "2" ]; then echo "FAIL: expected exitcode 2"; exit 1; fi
+          if [ "$SUMMARY" != "Plan: 1 to add, 0 to change, 0 to destroy." ]; then echo "FAIL: summary"; exit 1; fi
+          if ! echo "$DIFF" | grep -qF "+ null_resource.example will be created"; then echo "FAIL: diff"; exit 1; fi
+          hash=$(printf ' -chdir=tf-work' | md5sum | cut -d' ' -f1)
+          if [ "$IDENTIFIER" != "terraform-0-${hash}.tfplan" ]; then echo "FAIL: identifier, expected terraform-0-${hash}.tfplan"; exit 1; fi
+          if [ "$COMMAND" != "terraform plan -chdir=tf-work" ]; then echo "FAIL: command"; exit 1; fi
+          if ! echo "$BODY" | grep -qF "Diff of 1 change."; then echo "FAIL: comment body missing diff section"; exit 1; fi
+          if ! grep -q "^terraform -chdir=tf-work plan .*-detailed-exitcode.*-out=tfplan" "$FAKE_TF_LOG"; then echo "FAIL: plan not invoked as expected"; exit 1; fi
+          if [ -f tf-work/tfplan ]; then echo "FAIL: plan file should be cleaned up"; exit 1; fi
+          if [ -f tf.console.txt ] || [ -f tf.command.txt ]; then echo "FAIL: temp files not cleaned"; exit 1; fi
+          echo "PASS"

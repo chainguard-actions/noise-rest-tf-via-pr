@@ -1,0 +1,49 @@
+name: Test init with validate and format
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform CLI
+        run: |
+          mkdir -p "$RUNNER_TEMP/fakebin" tf-work
+          cp tests/fixtures/fake-tf.sh "$RUNNER_TEMP/fakebin/terraform"
+          chmod +x "$RUNNER_TEMP/fakebin/terraform"
+          for t in gh unzip; do
+            if ! command -v "$t" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/fakebin/$t"
+              chmod +x "$RUNNER_TEMP/fakebin/$t"
+            fi
+          done
+          echo "$RUNNER_TEMP/fakebin" >> "$GITHUB_PATH"
+          echo "FAKE_TF_LOG=$RUNNER_TEMP/fake-tf.log" >> "$GITHUB_ENV"
+      - id: action
+        uses: .
+        with:
+          command: init
+          format: "true"
+          validate: "true"
+          working-directory: tf-work
+          pr-number: "0"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          DIFF: ${{ steps.action.outputs.diff }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          echo "summary: $SUMMARY"
+          echo "command: $COMMAND"
+          echo "fake log:"; cat "$FAKE_TF_LOG"
+          if [ "$EXITCODE" != "0" ]; then echo "FAIL: expected exitcode 0"; exit 1; fi
+          if [ "$SUMMARY" != "Success! The configuration is valid." ]; then echo "FAIL: summary"; exit 1; fi
+          if [ "$COMMAND" != "terraform validate -chdir=tf-work" ]; then echo "FAIL: command"; exit 1; fi
+          if [ -n "$DIFF" ]; then echo "FAIL: no diff expected"; exit 1; fi
+          grep -q "^terraform -chdir=tf-work fmt -check -diff -recursive" "$FAKE_TF_LOG" || { echo "FAIL: fmt not run with default args"; exit 1; }
+          grep -q "^terraform -chdir=tf-work init" "$FAKE_TF_LOG" || { echo "FAIL: init not run"; exit 1; }
+          grep -q "^terraform -chdir=tf-work validate" "$FAKE_TF_LOG" || { echo "FAIL: validate not run"; exit 1; }
+          if grep -q " plan" "$FAKE_TF_LOG"; then echo "FAIL: plan should not run for init"; exit 1; fi
+          echo "PASS"

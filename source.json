@@ -1,6 +1,12 @@
 {
-  "owner": "OP5dev",
-  "repo": "TF-via-PR",
-  "version": "",
-  "url": "https://github.com/OP5dev/TF-via-PR"
+  "owner": "noise-rest",
+  "repo": "tf-via-pr",
+  "version": "v13.7.10",
+  "commit_sha": "1bd3a55d5da9ed0bdc70ca02481e4435ef7c4201",
+  "url": "https://github.com/noise-rest/tf-via-pr",
+  "policy_sha": "d636be7e43ef829af6e853da6b3c7566db9f72fe",
+  "test_policy_sha": "843adf9e4b8f85d0c08b27b9d0b09dd094b54702",
+  "test_agent_version": "2",
+  "harden_agent_version": "2",
+  "dependency_fingerprint": "sha256:fa92fc51409e31870d01f8bb2fb515e10890687cad741c1b4b53eef320b125b6"
 }
