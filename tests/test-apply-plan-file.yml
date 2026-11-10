@@ -1,0 +1,45 @@
+name: Test apply with supplied plan file
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform, ensure tools, create plan file
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/terraform
+          chmod +x /tmp/fakebin/terraform
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+          mkdir -p plan-input
+          echo "SUPPLIED-PLAN" > plan-input/custom.tfplan
+      - id: action
+        uses: .
+        with:
+          command: apply
+          plan-file: plan-input/custom.tfplan
+          pr-number: "0"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "command: $COMMAND"
+          echo "--- calls:"; cat /tmp/tf-calls.log
+          fail=0
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: exitcode expected 0"; fail=1; }
+          [ "$SUMMARY" = "Apply complete! Resources: 1 added, 0 changed, 0 destroyed." ] || { echo "FAIL: summary"; fail=1; }
+          [ "$COMMAND" = "terraform apply tfplan" ] || { echo "FAIL: command"; fail=1; }
+          grep -qx "terraform apply tfplan" /tmp/tf-calls.log || { echo "FAIL: apply args"; fail=1; }
+          grep -qx "applying plan content: SUPPLIED-PLAN" /tmp/tf-calls.log || { echo "FAIL: supplied plan not applied"; fail=1; }
+          [ ! -f plan-input/custom.tfplan ] || { echo "FAIL: supplied plan should have been moved"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"

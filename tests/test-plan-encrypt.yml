@@ -1,0 +1,43 @@
+name: Test plan with encryption
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform and ensure required tools exist
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/terraform
+          chmod +x /tmp/fakebin/terraform
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log tfplan tfplan.encrypted
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+          plan-encrypt: "s3cret-passphrase"
+      - name: Assert encrypted plan
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          ls -la
+          fail=0
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: exitcode expected 2"; fail=1; }
+          [ ! -f tfplan ] || { echo "FAIL: plaintext tfplan should be removed"; fail=1; }
+          [ -f tfplan.encrypted ] || { echo "FAIL: tfplan.encrypted missing"; exit 1; }
+          if grep -q FAKE-PLAN-CONTENT tfplan.encrypted; then echo "FAIL: file not encrypted"; fail=1; fi
+          dec=$(openssl enc -aes-256-ctr -pbkdf2 -salt -d -in tfplan.encrypted -pass pass:s3cret-passphrase)
+          echo "decrypted: $dec"
+          [ "$dec" = "FAKE-PLAN-CONTENT" ] || { echo "FAIL: decrypted content mismatch"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"

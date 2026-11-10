@@ -1,0 +1,42 @@
+name: Test tofu passes variables to init and validate
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake tofu and ensure required tools exist
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/tofu
+          chmod +x /tmp/fakebin/tofu
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          tool: tofu
+          command: init
+          validate: "true"
+          arg-var: "x=1"
+          pr-number: "0"
+      - name: Assert outputs
+        env:
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+        run: |
+          echo "identifier: $IDENTIFIER"; echo "summary: $SUMMARY"
+          echo "--- calls:"; cat /tmp/tf-calls.log
+          fail=0
+          echo "$IDENTIFIER" | grep -qE '^tofu-0-[0-9a-f]{32}\.tfplan$' || { echo "FAIL: identifier"; fail=1; }
+          grep -qx "tofu init -var=x=1" /tmp/tf-calls.log || { echo "FAIL: init should get -var for tofu"; fail=1; }
+          grep -qx "tofu validate -var=x=1" /tmp/tf-calls.log || { echo "FAIL: validate should get -var for tofu"; fail=1; }
+          [ "$SUMMARY" = "Success! The configuration is valid." ] || { echo "FAIL: summary"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"

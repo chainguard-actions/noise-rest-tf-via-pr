@@ -1,0 +1,47 @@
+name: Test init with format and validate
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform and ensure required tools exist
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/terraform
+          chmod +x /tmp/fakebin/terraform
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: init
+          format: "true"
+          validate: "true"
+          pr-number: "0"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          RESULT: ${{ steps.action.outputs.result }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "command: $COMMAND"; echo "result: $RESULT"
+          echo "--- calls:"; cat /tmp/tf-calls.log
+          fail=0
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: exitcode expected 0"; fail=1; }
+          [ "$SUMMARY" = "Success! The configuration is valid." ] || { echo "FAIL: summary"; fail=1; }
+          [ "$COMMAND" = "terraform validate" ] || { echo "FAIL: command"; fail=1; }
+          echo "$RESULT" | grep -qF "Success! The configuration is valid." || { echo "FAIL: result"; fail=1; }
+          grep -qx "terraform fmt -check -diff -recursive" /tmp/tf-calls.log || { echo "FAIL: fmt args"; fail=1; }
+          grep -qx "terraform init" /tmp/tf-calls.log || { echo "FAIL: init"; fail=1; }
+          grep -qx "terraform validate" /tmp/tf-calls.log || { echo "FAIL: validate"; fail=1; }
+          if grep -q " plan\| apply" /tmp/tf-calls.log; then echo "FAIL: plan/apply should not run for init"; fail=1; fi
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"

@@ -1,0 +1,49 @@
+name: Test plan with working directory and variables
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform and ensure required tools exist
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/terraform
+          chmod +x /tmp/fakebin/terraform
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+          working-directory: tests/fixtures/tf
+          arg-var-file: dev.tfvars
+          arg-var: "a=1,b=2"
+          preserve-plan: "true"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "command: $COMMAND"; echo "identifier: $IDENTIFIER"
+          echo "--- calls:"; cat /tmp/tf-calls.log
+          fail=0
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: exitcode expected 2"; fail=1; }
+          [ "$COMMAND" = "terraform plan -chdir=tests/fixtures/tf -var-file=dev.tfvars" ] || { echo "FAIL: command (var= should be hidden)"; fail=1; }
+          echo "$IDENTIFIER" | grep -qE '^terraform-0-[0-9a-f]{32}\.tfplan$' || { echo "FAIL: identifier format"; fail=1; }
+          [ "$IDENTIFIER" != "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" ] || { echo "FAIL: identifier should depend on args"; fail=1; }
+          grep -qx "terraform -chdir=tests/fixtures/tf init" /tmp/tf-calls.log || { echo "FAIL: init args"; fail=1; }
+          grep -qx "terraform -chdir=tests/fixtures/tf plan -var-file=dev.tfvars -var=a=1 -var=b=2 -detailed-exitcode -out=tfplan" /tmp/tf-calls.log || { echo "FAIL: plan args"; fail=1; }
+          [ -f tests/fixtures/tf/tfplan ] || { echo "FAIL: preserved plan file missing"; fail=1; }
+          grep -q FAKE-PLAN-CONTENT tests/fixtures/tf/tfplan || { echo "FAIL: plan content"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"

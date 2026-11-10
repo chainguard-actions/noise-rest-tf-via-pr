@@ -1,0 +1,53 @@
+name: Test plan basic
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install fake terraform and ensure required tools exist
+        run: |
+          mkdir -p /tmp/fakebin
+          cp tests/fixtures/bin/fake-tf /tmp/fakebin/terraform
+          chmod +x /tmp/fakebin/terraform
+          for d in gh jq unzip md5sum; do
+            if ! command -v "$d" >/dev/null; then
+              printf '#!/bin/sh\nexit 0\n' > "/tmp/fakebin/$d"; chmod +x "/tmp/fakebin/$d"
+            fi
+          done
+          rm -f /tmp/tf-calls.log
+          echo "/tmp/fakebin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          BODY: ${{ steps.action.outputs.comment-body }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "diff: $DIFF"
+          echo "command: $COMMAND"; echo "identifier: $IDENTIFIER"
+          echo "--- calls:"; cat /tmp/tf-calls.log
+          fail=0
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: exitcode expected 2"; fail=1; }
+          [ "$SUMMARY" = "Plan: 1 to add, 0 to change, 0 to destroy." ] || { echo "FAIL: summary"; fail=1; }
+          echo "$DIFF" | grep -qF "+ null_resource.example will be created" || { echo "FAIL: diff"; fail=1; }
+          [ "$COMMAND" = "terraform plan" ] || { echo "FAIL: command expected 'terraform plan'"; fail=1; }
+          [ "$IDENTIFIER" = "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" ] || { echo "FAIL: identifier"; fail=1; }
+          echo "$BODY" | grep -qF "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" || { echo "FAIL: comment body missing identifier"; fail=1; }
+          grep -qx "terraform init" /tmp/tf-calls.log || { echo "FAIL: init not called"; fail=1; }
+          grep -qx "terraform plan -detailed-exitcode -out=tfplan" /tmp/tf-calls.log || { echo "FAIL: plan args"; fail=1; }
+          grep -qx "terraform show tfplan" /tmp/tf-calls.log || { echo "FAIL: show not called"; fail=1; }
+          if grep -q "fmt\|validate" /tmp/tf-calls.log; then echo "FAIL: fmt/validate should not run by default"; fail=1; fi
+          [ ! -f tfplan ] || { echo "FAIL: tfplan should be cleaned up"; fail=1; }
+          [ ! -f tf.console.txt ] || { echo "FAIL: tf.console.txt should be cleaned up"; fail=1; }
+          [ "$fail" = 0 ] || exit 1
+          echo "PASS"
