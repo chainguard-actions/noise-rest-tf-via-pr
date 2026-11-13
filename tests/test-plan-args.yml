@@ -1,0 +1,63 @@
+name: Test plan with CLI arguments
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install stub terraform (and gh/unzip if missing)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/terraform" <<'EOF'
+          #!/usr/bin/env bash
+          echo "$*" >> "$RUNNER_TEMP/tf-calls.log"
+          if [[ "$1" == -chdir=* ]]; then cd "${1#-chdir=}" || exit 1; shift; fi
+          cmd="$1"; shift
+          case "$cmd" in
+            init) echo "Terraform has been successfully initialized!" ;;
+            plan)
+              for a in "$@"; do case "$a" in -out=*) echo "fake-plan" > "${a#-out=}" ;; esac; done
+              echo "No changes. Your infrastructure matches the configuration."
+              ;;
+            show) echo "No changes. Your infrastructure matches the configuration." ;;
+            *) echo "unexpected command $cmd"; exit 1 ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/terraform"
+          if ! command -v gh >/dev/null; then
+            printf '#!/bin/sh\necho "[]"\n' > "$RUNNER_TEMP/bin/gh"; chmod +x "$RUNNER_TEMP/bin/gh"
+          fi
+          if ! command -v unzip >/dev/null; then
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/unzip"; chmod +x "$RUNNER_TEMP/bin/unzip"
+          fi
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+          arg-detailed-exitcode: "false"
+          arg-var-file: a.tfvars
+          arg-target: null_resource.x,null_resource.y
+          arg-var: foo=bar
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          COMMAND: ${{ steps.action.outputs.command }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "diff: $DIFF"
+          echo "identifier: $IDENTIFIER"; echo "command: $COMMAND"
+          echo "calls:"; cat "$RUNNER_TEMP/tf-calls.log"
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: exitcode"; exit 1; }
+          [ "$SUMMARY" = "No changes. Your infrastructure matches the configuration." ] || { echo "FAIL: summary"; exit 1; }
+          [ -z "$DIFF" ] || { echo "FAIL: diff should be empty"; exit 1; }
+          [ "$COMMAND" = "terraform plan -var-file=a.tfvars -target=null_resource.x -target=null_resource.y" ] || { echo "FAIL: command"; exit 1; }
+          grep -qx -- "plan -var-file=a.tfvars -var=foo=bar -target=null_resource.x -target=null_resource.y -out=tfplan" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: plan args"; exit 1; }
+          echo "$IDENTIFIER" | grep -qE '^terraform-0-[0-9a-f]{32}\.tfplan$' || { echo "FAIL: identifier format"; exit 1; }
+          [ "$IDENTIFIER" != "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" ] || { echo "FAIL: identifier should depend on args"; exit 1; }
+          echo "PASS"

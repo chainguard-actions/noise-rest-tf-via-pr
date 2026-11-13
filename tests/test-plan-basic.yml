@@ -1,0 +1,84 @@
+name: Test plan basic
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install stub terraform (and gh/unzip if missing)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/terraform" <<'EOF'
+          #!/usr/bin/env bash
+          echo "$*" >> "$RUNNER_TEMP/tf-calls.log"
+          if [[ "$1" == -chdir=* ]]; then cd "${1#-chdir=}" || exit 1; shift; fi
+          cmd="$1"; shift
+          case "$cmd" in
+            fmt) exit 0 ;;
+            init) echo "Terraform has been successfully initialized!" ;;
+            validate) echo "Success! The configuration is valid." ;;
+            plan)
+              detailed=0
+              for a in "$@"; do
+                case "$a" in
+                  -out=*) echo "fake-plan" > "${a#-out=}" ;;
+                  -detailed-exitcode) detailed=1 ;;
+                esac
+              done
+              echo "Terraform will perform the following actions:"
+              echo "Plan: 1 to add, 0 to change, 0 to destroy."
+              if [[ $detailed == 1 ]]; then exit 2; fi
+              ;;
+            show)
+              if [[ "$1" == "-json" ]]; then echo '{"resource_changes":[]}'; exit 0; fi
+              echo "Terraform will perform the following actions:"
+              echo ""
+              echo "  # null_resource.test will be created"
+              echo "  + resource \"null_resource\" \"test\" {"
+              echo "      + id = (known after apply)"
+              echo "    }"
+              echo ""
+              echo "Plan: 1 to add, 0 to change, 0 to destroy."
+              ;;
+            apply) echo "Apply complete! Resources: 1 added, 0 changed, 0 destroyed." ;;
+            *) echo "unknown command $cmd"; exit 1 ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/terraform"
+          if ! command -v gh >/dev/null; then
+            printf '#!/bin/sh\necho "[]"\n' > "$RUNNER_TEMP/bin/gh"; chmod +x "$RUNNER_TEMP/bin/gh"
+          fi
+          if ! command -v unzip >/dev/null; then
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/unzip"; chmod +x "$RUNNER_TEMP/bin/unzip"
+          fi
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+          tag-actor: never
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          DIFF: ${{ steps.action.outputs.diff }}
+          IDENTIFIER: ${{ steps.action.outputs.identifier }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          BODY: ${{ steps.action.outputs.comment-body }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "diff: $DIFF"
+          echo "identifier: $IDENTIFIER"; echo "command: $COMMAND"
+          echo "calls:"; cat "$RUNNER_TEMP/tf-calls.log"
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: exitcode"; exit 1; }
+          [ "$SUMMARY" = "Plan: 1 to add, 0 to change, 0 to destroy." ] || { echo "FAIL: summary"; exit 1; }
+          echo "$DIFF" | grep -qF "+ null_resource.test will be created" || { echo "FAIL: diff"; exit 1; }
+          [ "$IDENTIFIER" = "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" ] || { echo "FAIL: identifier"; exit 1; }
+          [ "$COMMAND" = "terraform plan" ] || { echo "FAIL: command (hidden args should be removed)"; exit 1; }
+          echo "$BODY" | grep -qF "terraform-0-d41d8cd98f00b204e9800998ecf8427e.tfplan" || { echo "FAIL: body identifier"; exit 1; }
+          grep -q "^init" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: init not called"; exit 1; }
+          grep -qE "^plan .*-detailed-exitcode.*-out=tfplan" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: plan args"; exit 1; }
+          [ ! -f tfplan ] || { echo "FAIL: tfplan should be cleaned up"; exit 1; }
+          echo "PASS"

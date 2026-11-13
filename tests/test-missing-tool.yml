@@ -1,0 +1,25 @@
+name: Test missing tool fails
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          command: plan
+          tool: nonexistent-tf-tool
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert action failed
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+        run: |
+          echo "outcome: $OUTCOME"; echo "summary: $SUMMARY"
+          [ "$OUTCOME" = "failure" ] || { echo "FAIL: expected failure"; exit 1; }
+          [ -z "$SUMMARY" ] || { echo "FAIL: post step should not run"; exit 1; }
+          echo "PASS"

@@ -1,0 +1,52 @@
+name: Test apply with auto-approve
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install stub terraform (and gh/unzip if missing)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/terraform" <<'EOF'
+          #!/usr/bin/env bash
+          echo "$*" >> "$RUNNER_TEMP/tf-calls.log"
+          if [[ "$1" == -chdir=* ]]; then cd "${1#-chdir=}" || exit 1; shift; fi
+          cmd="$1"; shift
+          case "$cmd" in
+            init) echo "Terraform has been successfully initialized!" ;;
+            apply) echo "Apply complete! Resources: 1 added, 0 changed, 0 destroyed." ;;
+            *) echo "unexpected command $cmd"; exit 1 ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/terraform"
+          if ! command -v gh >/dev/null; then
+            printf '#!/bin/sh\necho "[]"\n' > "$RUNNER_TEMP/bin/gh"; chmod +x "$RUNNER_TEMP/bin/gh"
+          fi
+          if ! command -v unzip >/dev/null; then
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/unzip"; chmod +x "$RUNNER_TEMP/bin/unzip"
+          fi
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: apply
+          arg-auto-approve: "true"
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+          RESULT: ${{ steps.action.outputs.result }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "command: $COMMAND"; echo "result: $RESULT"
+          echo "calls:"; cat "$RUNNER_TEMP/tf-calls.log"
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: exitcode"; exit 1; }
+          [ "$SUMMARY" = "Apply complete! Resources: 1 added, 0 changed, 0 destroyed." ] || { echo "FAIL: summary"; exit 1; }
+          [ "$COMMAND" = "terraform apply -auto-approve" ] || { echo "FAIL: command"; exit 1; }
+          echo "$RESULT" | grep -qF "Apply complete!" || { echo "FAIL: result"; exit 1; }
+          grep -qx -- "apply -auto-approve" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: apply args (no plan file expected)"; exit 1; }
+          echo "PASS"

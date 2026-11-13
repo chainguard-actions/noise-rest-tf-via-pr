@@ -1,0 +1,56 @@
+name: Test init with format, validate and working-directory
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install stub terraform (and gh/unzip if missing)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" infra
+          cat > "$RUNNER_TEMP/bin/terraform" <<'EOF'
+          #!/usr/bin/env bash
+          echo "$*" >> "$RUNNER_TEMP/tf-calls.log"
+          if [[ "$1" == -chdir=* ]]; then cd "${1#-chdir=}" || exit 1; shift; fi
+          cmd="$1"; shift
+          case "$cmd" in
+            fmt) exit 0 ;;
+            init) echo "Terraform has been successfully initialized!" ;;
+            validate) echo "Success! The configuration is valid." ;;
+            *) echo "unexpected command $cmd"; exit 1 ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/terraform"
+          if ! command -v gh >/dev/null; then
+            printf '#!/bin/sh\necho "[]"\n' > "$RUNNER_TEMP/bin/gh"; chmod +x "$RUNNER_TEMP/bin/gh"
+          fi
+          if ! command -v unzip >/dev/null; then
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/unzip"; chmod +x "$RUNNER_TEMP/bin/unzip"
+          fi
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - id: action
+        uses: .
+        with:
+          command: init
+          format: "true"
+          validate: "true"
+          working-directory: infra
+          pr-number: "0"
+          upload-plan: "false"
+      - name: Assert outputs
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+          SUMMARY: ${{ steps.action.outputs.summary }}
+          COMMAND: ${{ steps.action.outputs.command }}
+        run: |
+          echo "exitcode: $EXITCODE"; echo "summary: $SUMMARY"; echo "command: $COMMAND"
+          echo "calls:"; cat "$RUNNER_TEMP/tf-calls.log"
+          [ "$EXITCODE" = "0" ] || { echo "FAIL: exitcode"; exit 1; }
+          [ "$SUMMARY" = "Success! The configuration is valid." ] || { echo "FAIL: summary"; exit 1; }
+          [ "$COMMAND" = "terraform validate -chdir=infra" ] || { echo "FAIL: command"; exit 1; }
+          grep -qx -- "-chdir=infra fmt -check -diff -recursive" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: fmt args"; exit 1; }
+          grep -qx -- "-chdir=infra init" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: init args"; exit 1; }
+          grep -qx -- "-chdir=infra validate" "$RUNNER_TEMP/tf-calls.log" || { echo "FAIL: validate args"; exit 1; }
+          if grep -q " plan" "$RUNNER_TEMP/tf-calls.log"; then echo "FAIL: plan should not run"; exit 1; fi
+          echo "PASS"

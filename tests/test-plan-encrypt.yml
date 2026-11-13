@@ -1,0 +1,61 @@
+name: Test plan with encryption and preserve-plan
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install stub terraform (and gh/unzip if missing)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat > "$RUNNER_TEMP/bin/terraform" <<'EOF'
+          #!/usr/bin/env bash
+          echo "$*" >> "$RUNNER_TEMP/tf-calls.log"
+          if [[ "$1" == -chdir=* ]]; then cd "${1#-chdir=}" || exit 1; shift; fi
+          cmd="$1"; shift
+          case "$cmd" in
+            init) echo "Terraform has been successfully initialized!" ;;
+            plan)
+              for a in "$@"; do case "$a" in -out=*) echo "fake-plan" > "${a#-out=}" ;; esac; done
+              echo "Plan: 1 to add, 0 to change, 0 to destroy."
+              exit 2
+              ;;
+            show)
+              echo "  # null_resource.test will be created"
+              echo "Plan: 1 to add, 0 to change, 0 to destroy."
+              ;;
+            *) echo "unexpected command $cmd"; exit 1 ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/terraform"
+          if ! command -v gh >/dev/null; then
+            printf '#!/bin/sh\necho "[]"\n' > "$RUNNER_TEMP/bin/gh"; chmod +x "$RUNNER_TEMP/bin/gh"
+          fi
+          if ! command -v unzip >/dev/null; then
+            printf '#!/bin/sh\nexit 0\n' > "$RUNNER_TEMP/bin/unzip"; chmod +x "$RUNNER_TEMP/bin/unzip"
+          fi
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          rm -f tfplan tfplan.encrypted
+      - id: action
+        uses: .
+        with:
+          command: plan
+          pr-number: "0"
+          upload-plan: "false"
+          plan-encrypt: s3cret-pass
+          preserve-plan: "true"
+      - name: Assert encrypted plan
+        env:
+          EXITCODE: ${{ steps.action.outputs.exitcode }}
+        run: |
+          echo "exitcode: $EXITCODE"
+          ls -la tfplan* || true
+          [ "$EXITCODE" = "2" ] || { echo "FAIL: exitcode"; exit 1; }
+          [ -f tfplan ] || { echo "FAIL: tfplan should be preserved"; exit 1; }
+          [ -f tfplan.encrypted ] || { echo "FAIL: tfplan.encrypted missing"; exit 1; }
+          if cmp -s tfplan tfplan.encrypted; then echo "FAIL: encrypted file equals plaintext"; exit 1; fi
+          DEC=$(openssl enc -aes-256-ctr -pbkdf2 -d -in tfplan.encrypted -pass pass:s3cret-pass)
+          echo "decrypted: $DEC"
+          [ "$DEC" = "fake-plan" ] || { echo "FAIL: decrypted content mismatch"; exit 1; }
+          echo "PASS"
